@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{A035065F-E7A5-4EDB-93A7-E9B38FB3947C}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx</Extensions>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{13418BCB-C11C-485B-9D34-33C9A0BF5626}</UniqueIdentifier>
+      <Extensions>h;hpp;hxx</Extensions>
+    </Filter>
+    <Filter Include="Documentation">
+      <UniqueIdentifier>{B93809E6-30A3-474D-B43D-4D971A3061CD}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\main.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\devices.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\overlay.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\config.cpp"><Filter>Source Files</Filter></ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\openmouse.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\screen_lock.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\automation_cursor.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\automation_input.h"><Filter>Header Files</Filter></ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md"><Filter>Documentation</Filter></None>
+    <None Include="docs\DEVELOPMENT.md"><Filter>Documentation</Filter></None>
+    <None Include="docs\PUBLISHING.md"><Filter>Documentation</Filter></None>
+  </ItemGroup>
+</Project>

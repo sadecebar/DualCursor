@@ -1,0 +1,30 @@
+# Local build output and downloadable release artifacts
+/build/
+/dist/
+/bin/
+/obj/
+/out/
+*.exe
+*.obj
+*.pdb
+*.ilk
+*.idb
+*.tlog
+*.pch
+*.exp
+*.lib
+
+# IDE state, machine-specific input bindings, and diagnostic output
+/.vs/
+/.vscode/
+/.idea/
+*.user
+*.suo
+*.log
+*.ini
+*.dmp
+*.zip
+/.agents/
+/.codex/
+.env
+.env.*

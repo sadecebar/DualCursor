@@ -25,6 +25,7 @@
 #include "openmouse.h"
 #include "screen_lock.h"
 #include "automation_input.h"
+#include "resource.h"
 #include <shellapi.h>   // CommandLineToArgvW — not pulled in by WIN32_LEAN_AND_MEAN
 #include <windowsx.h>
 #include <atomic>
@@ -2401,6 +2402,14 @@ void RelaunchSelf(const wchar_t* args) {
     }
 }
 
+HICON AppIcon(HINSTANCE instance, bool small) {
+    const int width = GetSystemMetrics(small ? SM_CXSMICON : SM_CXICON);
+    const int height = GetSystemMetrics(small ? SM_CYSMICON : SM_CYICON);
+    HICON icon = reinterpret_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(IDI_DUALCURSOR),
+        IMAGE_ICON, width, height, LR_SHARED));
+    return icon ? icon : LoadIconW(nullptr, IDI_APPLICATION);
+}
+
 void TrayAdd(HWND hwnd) {
     NOTIFYICONDATAW nid{};
     nid.cbSize           = sizeof(nid);
@@ -2408,7 +2417,7 @@ void TrayAdd(HWND hwnd) {
     nid.uID              = kTrayIconId;
     nid.uFlags           = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     nid.uCallbackMessage = kTrayCallbackMsg;
-    nid.hIcon            = LoadIconW(nullptr, IDI_APPLICATION);
+    nid.hIcon            = AppIcon(GetModuleHandleW(nullptr), true);
     wcscpy_s(nid.szTip, L"DualCursor — right-click to stop (panic: Ctrl+Alt+Shift+Q)");
     Shell_NotifyIconW(NIM_ADD, &nid);
 }
@@ -2483,7 +2492,8 @@ int RunMain(HINSTANCE inst) {
     wc.hInstance     = inst;
     wc.lpszClassName = L"DualCursor.Engine";
     wc.hCursor       = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hIcon         = LoadIconW(nullptr, IDI_APPLICATION);
+    wc.hIcon         = AppIcon(inst, false);
+    wc.hIconSm       = AppIcon(inst, true);
     wc.hbrBackground = GetSysColorBrush(COLOR_BTNFACE);
     RegisterClassExW(&wc);
 

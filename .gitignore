@@ -28,3 +28,13 @@
 /.codex/
 .env
 .env.*
+
+# Kept locally, but omitted from the streamlined public repository.
+/tests/
+/docs/
+/tools/
+/package.ps1
+/CMakeLists.txt
+/DualCursor.sln
+/DualCursor.vcxproj
+/DualCursor.vcxproj.filters

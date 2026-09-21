@@ -33,10 +33,13 @@ if "%OUT%"=="" set "OUT=DualCursor.exe"
 cd /d "%~dp0"
 if not exist build mkdir build
 
+rc /nologo /I assets /fo build\dualcursor.res assets\dualcursor.rc
+if errorlevel 1 exit /b 1
+
 cl /nologo /std:c++17 /EHsc /W4 /permissive- /O2 /MT /utf-8 ^
    /DUNICODE /D_UNICODE /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
    /Fo:build\ /Fe:%OUT% ^
-   src\main.cpp src\devices.cpp src\overlay.cpp src\config.cpp ^
+   src\main.cpp src\devices.cpp src\overlay.cpp src\config.cpp build\dualcursor.res ^
    /link /SUBSYSTEM:WINDOWS /ENTRY:wWinMainCRTStartup ^
    user32.lib gdi32.lib shell32.lib ole32.lib uuid.lib advapi32.lib
 exit /b %errorlevel%

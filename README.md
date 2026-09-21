@@ -1,5 +1,7 @@
 # DualCursor
 
+<img src="https://raw.githubusercontent.com/sadecebar/DualCursor/main/assets/dualcursor.png" width="96" height="96" alt="DualCursor logo">
+
 **Two physical mice. Two colored pointers. One Windows computer.**
 
 DualCursor is a free, open-source Windows app that gives two physical mice their
@@ -213,10 +215,14 @@ are queued from the hook to the main thread, which applies screen bounds and
 button ownership before dispatching them.
 
 To build, install Visual Studio 2022 Build Tools with **Desktop development
-with C++** and run `build.cmd`. Developers can also use `DualCursor.sln` or
-CMake. The source repository includes `docs/DEVELOPMENT.md` for build/test
-instructions and `docs/PUBLISHING.md` for releases. Development files are not
-needed to run the app.
+with C++** and a Windows SDK, then run `build.cmd`. This compiles the source
+and embeds the icon in `DualCursor.exe`.
+
+The public repository is intentionally small: `src/` contains the program,
+`assets/` contains its logo and icon resource, and `build.cmd` builds it.
+These source files are for inspecting or rebuilding the app; they are not
+needed by someone using the Windows download. Development tests, internal
+guides, and optional helper scripts are kept out of the public file list.
 
 ## License and credits
 
@@ -224,8 +230,7 @@ Free and open source under the **MIT License**. See `LICENSE` for the full
 terms and warranty disclaimer.
 
 Based on [openMouse](https://github.com/alstonmendonca/openMouse) by **Alston
-Mendonca**. The upstream copyright notice is preserved. Its original README
-is retained in `docs/UPSTREAM_README.md` in the source repository for historical
-context; this README describes current DualCursor behavior.
+Mendonca**. The upstream copyright notice is preserved in `LICENSE`.
+This README describes current DualCursor behavior.
 
 DualCursor is not affiliated with TinyTask, Microsoft, or Roblox.

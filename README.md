@@ -12,11 +12,18 @@ The main purpose is to use **two different mice on the same computer**.
 Automation support makes this setup work with external tools such as
 **TinyTask**; DualCursor itself is not a macro recorder or player.
 
+**Automation is experimental, not fully independent input.** Simultaneous
+TinyTask playback and manual browsing can still interfere with clicks,
+selection, dragging, and focus. Two monitors and screen locks do not isolate
+Windows input. This is not yet a reliable solution for unattended automation
+alongside unrestricted manual use.
+
 A typical setup is TinyTask using the orange pointer on monitor 2 while you
-use the blue pointer to browse or work on monitor 1. Moving your manual mouse
-does not redirect the macro's clicks to your pointer. Windows still shares its
-foreground window and button state, so read the limitations before relying on
-a macro. This reduces interference; it does not create two isolated computers.
+use the blue pointer to browse or work on monitor 1. The routing tries to keep
+macro clicks at the automation pointer's saved position. Windows still shares
+its foreground window and button state, so read the limitations before relying
+on a macro. This reduces some interference; it does not create two isolated
+computers or guarantee that every click reaches the intended application.
 
 ## Download and run
 
@@ -123,8 +130,15 @@ Windows still has one shared system cursor, button state, and foreground window.
 DualCursor draws the separate pointers and coordinates their input.
 
 - Clicking between applications can change focus and affect typing or macro timing.
+- Moving a physical mouse restores its hover position after a macro click when
+  no source holds a button. This does not give both applications independent
+  hover or focus, and switching foreground windows can delay input.
 - Two simultaneous independent drags are not supported. Direct external cursor
   warps can still disturb a drag even when conflicting clicks are filtered.
+- Direct cursor warps have no reliable source identity. A warp that leaves the
+  system cursor at the same position cannot be distinguished from no movement.
+  Relative macro movement also uses the shared system cursor as its starting
+  position, which manual input can change.
 - Relative-motion games, cursor-capturing applications, exclusive fullscreen,
   elevated windows, and protected games may behave differently or reject input.
   Compatibility with every game, including Roblox, is not guaranteed.

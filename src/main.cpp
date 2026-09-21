@@ -10,8 +10,8 @@
 //  * Windows has ONE hardware cursor and ONE foreground window per desktop.
 //    We do not change that. Exactly one seat "owns" the real cursor at any
 //    moment; every other seat's pointer is drawn by us as a layered window.
-//    Clicking transfers ownership. This is a deliberate turn-taking model —
-//    see README, "What this cannot do".
+//    Clicking transfers ownership; physical movement also transfers hover
+//    when no source holds a button. See README, "Important limitations".
 //
 //  * RIDEV_NOLEGACY suppresses OS-generated legacy messages for a whole device
 //    CLASS, never a single device. So capturing one mouse means capturing all
@@ -417,11 +417,25 @@ void SetActiveSeat(int seat) {
     if (g_cursorHidden) UpdateShellCursorFallback(seat);
 }
 
-void PlacePointer(int seat, POINT position) {
+bool PhysicalButtonsHeld();
+
+void PlacePointer(int seat, POINT position, bool physicalMovement = false) {
     // A physical device sharing the automation seat must not steer its drag.
     if (seat == g_automationSeat && g_automationButtons.Held()) return;
+    if (physicalMovement) {
+        // Preserve a direct automation warp before physical motion replaces it.
+        POINT actual{};
+        if (GetCursorPos(&actual)) g_automationInput.Poll(actual);
+    }
     Seat& s = g_seats[seat];
     s.pos = g_screenLocks[seat].Constrain(position, g_screens, VirtualScreenRect());
+
+    // Hover follows a moving physical mouse again after a macro click.
+    // Never transfer the shared cursor while another source holds a button.
+    if (physicalMovement && seat != g_activeSeat &&
+        !g_automationButtons.Held() && !PhysicalButtonsHeld()) {
+        SetActiveSeat(seat);
+    }
 
     // The owning seat still drives the real cursor — that is what keeps hover
     // states and click targeting following it — but when the cursor is hidden
@@ -723,13 +737,13 @@ void OnRawMouse(HANDLE dev, const RAWMOUSE& m) {
         POINT p;
         p.x = v.left + (LONG)(((int64_t)m.lLastX * (v.right  - v.left)) / 65535);
         p.y = v.top  + (LONG)(((int64_t)m.lLastY * (v.bottom - v.top))  / 65535);
-        PlacePointer(seat, p);
+        PlacePointer(seat, p, true);
     } else if (m.lLastX || m.lLastY) {
         POINT p = g_seats[seat].pos;
         const double speed = (seat < (int)g_cfg.sensitivity.size()) ? g_cfg.sensitivity[seat] : 1.0;
         p.x += (LONG)(m.lLastX * speed);
         p.y += (LONG)(m.lLastY * speed);
-        PlacePointer(seat, p);
+        PlacePointer(seat, p, true);
     }
 
     if (m.usButtonFlags) {
@@ -1503,7 +1517,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_APP + 20: {
         const int seat = LOWORD(wp);
         if (seat >= g_cfg.seatCount) return 0;
-        PlacePointer(seat, {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)});
+        PlacePointer(seat, {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)}, true);
         if (HIWORD(wp)) HandleButton(seat, HIWORD(wp), 0);
         g_physicalButtonHeld.store(PhysicalButtonsHeld());
         return 1;

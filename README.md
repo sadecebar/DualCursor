@@ -53,9 +53,11 @@ checksum is provided alongside the ZIP.
 ## First use
 
 - **Mouse 1** has a blue pointer; **Mouse 2** has an orange pointer.
-- The window shows the assigned devices and their connection status.
+- The compact window shows the assigned devices, their cursor colors, and
+  connection status. Screen buttons show the current lock for each mouse.
 - Automatic assignment is used until you identify your mice explicitly.
-- For ordinary two-mouse use without macros, choose **Automation: Off**.
+- For ordinary two-mouse use without macros, choose **Off** under
+  **Automation routing**.
 - Minimize the window to keep using the pointers. Closing it stops DualCursor
   and restores normal Windows mouse control.
 
@@ -94,7 +96,7 @@ last for the current session and reset when DualCursor closes.
 1. Assign the physical mice and confirm their colors.
 2. Lock **Mouse 1** to your working monitor, for example **Screen 1**.
 3. Lock **Mouse 2** to the macro's monitor, for example **Screen 2**.
-4. Select **Automation: Mouse 2**. This is the default on startup.
+4. Select **Mouse 2** under **Automation routing**. This is the default on startup.
 5. Test a short TinyTask playback with coordinates inside the automation monitor.
 6. Use Mouse 1 on your working monitor while the orange pointer shows the macro.
 
@@ -144,6 +146,13 @@ DualCursor draws the separate pointers and coordinates their input.
   Compatibility with every game, including Roblox, is not guaranteed.
 - Direct cursor-position polling runs approximately every 16 ms; very brief
   movement between samples may not appear on the colored pointer.
+- Unattributed position polling pauses during physical movement and for 50 ms
+  afterward so a physical mouse cannot be mistaken for automation. Tiny
+  one-pixel changes around our own cursor warps are also ignored by polling.
+  Explicit injected automation movement is still tracked during physical
+  activity. Tools that only use direct cursor warps can lose movement while
+  a physical mouse is moving; a warp overwritten before its click cannot be
+  reliably recovered.
 - Automation mirroring/routing is disabled if the Windows cursor cannot be
   hidden or the app falls back to its one-pixel cursor safety cage.
 

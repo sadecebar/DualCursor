@@ -25,6 +25,7 @@ public:
         head_ = count_ = 0;
         fault_ = false;
         ownMoving_ = false;
+        physicalSeen_ = false;
         ++revision_;
     }
 
@@ -40,8 +41,21 @@ public:
         ownMoving_ = false;
     }
 
-    void Poll(POINT actual) {
+    void PhysicalMove(POINT actual, ULONGLONG now = GetTickCount64()) {
         std::lock_guard<std::mutex> lock(mutex_);
+        physicalSeen_ = true;
+        lastPhysical_ = now;
+        cursor_.OwnMove(actual, actual);
+    }
+
+    void Poll(POINT actual, ULONGLONG now = GetTickCount64()) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        // Raw input and cursor updates do not arrive atomically. During a
+        // physical movement burst, unattributed samples are not evidence of
+        // automation. Explicit injected events still go through Capture.
+        if (physicalSeen_ && now - lastPhysical_ < 50) {
+            return;
+        }
         Observe(actual, false);
     }
 
@@ -105,6 +119,8 @@ private:
     int seat_ = -1;
     POINT target_{}, expected_{};
     uint64_t revision_ = 0;
+    ULONGLONG lastPhysical_ = 0;
+    bool physicalSeen_ = false;
     bool fault_ = false, ownMoving_ = false;
 };
 

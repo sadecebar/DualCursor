@@ -11,23 +11,26 @@ public:
     void Reset(POINT actual) {
         last_ = actual;
         ready_ = true;
-        pendingOwn_ = false;
+        ownPositionKnown_ = false;
     }
 
     void OwnMove(POINT actual, POINT expected) {
         Reset(actual);
+        ownObserved_ = actual;
         expected_ = expected;
-        pendingOwn_ = !Near(actual, expected);
+        ownPositionKnown_ = true;
     }
 
     bool Observe(POINT actual) {
         if (!ready_) { Reset(actual); return false; }
         if (actual.x == last_.x && actual.y == last_.y) return false;
         last_ = actual;
-        // Absolute SendInput coordinates can round by one pixel. Its queued
-        // move may become visible only after the caller recorded OwnMove.
-        const bool own = pendingOwn_ && Near(actual, expected_);
-        pendingOwn_ = false;
+        // Own warps can settle late or oscillate by one pixel. Keep their
+        // rounding envelope until a genuinely different position is seen.
+        // Explicit injected moves bypass this ambiguous polling path.
+        const bool own = ownPositionKnown_ &&
+            (Near(actual, expected_) || Near(actual, ownObserved_));
+        if (!own) ownPositionKnown_ = false;
         return !own;
     }
 
@@ -37,10 +40,10 @@ private:
                a.y >= b.y - 1 && a.y <= b.y + 1;
     }
 
-    POINT last_{};
+    POINT last_{}, ownObserved_{};
     POINT expected_{};
     bool ready_ = false;
-    bool pendingOwn_ = false;
+    bool ownPositionKnown_ = false;
 };
 
 } // namespace om

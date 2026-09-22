@@ -26,6 +26,7 @@
 #include "screen_lock.h"
 #include "automation_input.h"
 #include "resource.h"
+#include "ui_theme.h"
 #include <shellapi.h>   // CommandLineToArgvW — not pulled in by WIN32_LEAN_AND_MEAN
 #include <windowsx.h>
 #include <atomic>
@@ -58,8 +59,6 @@ HWND                      g_hwnd = nullptr;
 UINT                      g_captionButton = 0;
 bool                      g_captureActive = false;
 HWND                      g_seatList = nullptr;
-HFONT                     g_mouseIconFont = nullptr;
-HFONT                     g_screenIconFont = nullptr;
 WNDPROC                   g_seatListProc = nullptr;
 std::vector<ScreenInfo>    g_screens;
 ScreenLock                g_screenLocks[kMaxSeats];
@@ -75,7 +74,7 @@ constexpr int             kCloseButtonId = 200;
 constexpr int             kSeatListId = 201;
 constexpr int             kAutomationId = 202;
 HWND                      g_automationLabel = nullptr;
-HWND                      g_automationChoice = nullptr;
+HWND                      g_automationSegments[kMaxSeats + 1]{};
 int                       g_automationSeat = -1;
 AutomationInput           g_automationInput;
 AutomationButtons         g_automationButtons;
@@ -423,9 +422,9 @@ void PlacePointer(int seat, POINT position, bool physicalMovement = false) {
     // A physical device sharing the automation seat must not steer its drag.
     if (seat == g_automationSeat && g_automationButtons.Held()) return;
     if (physicalMovement) {
-        // Preserve a direct automation warp before physical motion replaces it.
+        // Raw movement is known physical input, not inferred automation.
         POINT actual{};
-        if (GetCursorPos(&actual)) g_automationInput.Poll(actual);
+        if (GetCursorPos(&actual)) g_automationInput.PhysicalMove(actual);
     }
     Seat& s = g_seats[seat];
     s.pos = g_screenLocks[seat].Constrain(position, g_screens, VirtualScreenRect());
@@ -1091,6 +1090,19 @@ std::vector<ScreenInfo> EnumerateScreens() {
     return screens;
 }
 
+COLORREF SeatColor(int seat) {
+    return seat < static_cast<int>(g_cfg.seatColors.size()) ? g_cfg.seatColors[seat] : RGB(128, 136, 148);
+}
+
+int AutomationColumns(int width) {
+    return std::max(1, std::min(g_cfg.seatCount + 1, (width - ui::Px(230)) / ui::Px(92)));
+}
+
+int SeatListTop(int width) {
+    const int columns = AutomationColumns(width);
+    return ui::Px(88 + ((g_cfg.seatCount + columns) / columns) * 44);
+}
+
 void LayoutScreenButtons() {
     if (!g_seatList) return;
     if (IsIconic(GetAncestor(g_seatList, GA_ROOT))) return;
@@ -1101,10 +1113,10 @@ void LayoutScreenButtons() {
     RECT client{};
     GetClientRect(g_seatList, &client);
     const int count = static_cast<int>(g_screens.size());
-    const int columns = std::max(1, std::min(count, (static_cast<int>(client.right) - 230) / 112));
+    const int columns = std::max(1, std::min(count, (static_cast<int>(client.right) - ui::Px(260)) / ui::Px(112)));
     const int rows = (count + columns - 1) / columns;
-    g_screenButtonArea = count ? columns * 112 : 0;
-    const int rowHeight = std::max(58, rows * 36 + 16);
+    g_screenButtonArea = count ? columns * ui::Px(112) : 0;
+    const int rowHeight = std::max(ui::Px(94), rows * ui::Px(44) + ui::Px(24));
     if (SendMessageW(g_seatList, LB_GETITEMHEIGHT, 0, 0) != rowHeight)
         SendMessageW(g_seatList, LB_SETITEMHEIGHT, 0, rowHeight);
     for (const auto& button : g_screenButtons) {
@@ -1115,8 +1127,9 @@ void LayoutScreenButtons() {
             continue;
         }
         const int screen = static_cast<int>(button.screen);
-        MoveWindow(button.hwnd, client.right - g_screenButtonArea + (screen % columns) * 112,
-                   row.top + 10 + (screen / columns) * 36, 104, 32, TRUE);
+        MoveWindow(button.hwnd, client.right - g_screenButtonArea + (screen % columns) * ui::Px(112),
+                   row.top + (rowHeight - rows * ui::Px(44) + ui::Px(8)) / 2 + (screen / columns) * ui::Px(44),
+                   ui::Px(104), ui::Px(36), TRUE);
         ShowWindow(button.hwnd, row.bottom > 0 && row.top < client.bottom ? SW_SHOWNA : SW_HIDE);
     }
     layingOut = false;
@@ -1141,7 +1154,7 @@ void UpdateScreenButtonNames() {
         const std::wstring label = std::wstring(locked ? L"Unlock from screen " : L"Lock to screen ") +
                                    std::to_wstring(screen.number);
         SetWindowTextW(button.hwnd, label.c_str());
-        InvalidateRect(button.hwnd, nullptr, TRUE);
+        InvalidateRect(button.hwnd, nullptr, FALSE);
     }
 }
 
@@ -1155,10 +1168,12 @@ void RebuildScreenButtons() {
     for (int seat = 0; seat < g_cfg.seatCount; ++seat) {
         for (size_t screen = 0; screen < g_screens.size(); ++screen) {
             const INT_PTR id = kScreenButtonId + static_cast<INT_PTR>(g_screenButtons.size());
+            // End the automation radio group inside this nested dialog container.
             HWND button = CreateWindowExW(0, L"BUTTON", L"",
-                WS_CHILD | WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY,
+                WS_CHILD | WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY | (screen == 0 ? WS_GROUP : 0),
                 0, 0, 104, 32, g_seatList, reinterpret_cast<HMENU>(id), inst, nullptr);
             g_screenButtons.push_back({button, seat, screen});
+            ui::StyleButton(button, SeatColor(seat));
         }
     }
     UpdateScreenButtonNames();
@@ -1168,24 +1183,10 @@ void RebuildScreenButtons() {
 void DrawScreenButton(const DRAWITEMSTRUCT* item, const ScreenButton& button) {
     const auto& screen = g_screens[button.screen];
     const bool locked = g_screenLocks[button.seat].device == screen.device;
-    FillRect(item->hDC, &item->rcItem, GetSysColorBrush(locked ? COLOR_HIGHLIGHT : COLOR_BTNFACE));
-    RECT frame = item->rcItem;
-    DrawEdge(item->hDC, &frame, locked || (item->itemState & ODS_SELECTED) ? EDGE_SUNKEN : EDGE_RAISED, BF_RECT);
-    const int saved = SaveDC(item->hDC);
-    SetBkMode(item->hDC, TRANSPARENT);
-    SetTextColor(item->hDC, GetSysColor(locked ? COLOR_HIGHLIGHTTEXT : COLOR_BTNTEXT));
-    SelectObject(item->hDC, g_screenIconFont);
-    RECT icon{frame.left + 7, frame.top, frame.left + 29, frame.bottom};
-    DrawTextW(item->hDC, L"\uE7F4", 1, &icon, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    SelectObject(item->hDC, GetStockObject(DEFAULT_GUI_FONT));
-    RECT textRect{frame.left + 34, frame.top, frame.right - 5, frame.bottom};
     const std::wstring label = L"Screen " + std::to_wstring(screen.number);
-    DrawTextW(item->hDC, label.c_str(), -1, &textRect, DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    if (item->itemState & ODS_FOCUS) {
-        InflateRect(&frame, -4, -4);
-        DrawFocusRect(item->hDC, &frame);
-    }
-    RestoreDC(item->hDC, saved);
+    ui::Buffer buffer(item->hDC, item->rcItem);
+    ui::DrawButton(buffer.dc, item->rcItem, button.hwnd, label.c_str(), locked,
+        SeatColor(button.seat), L"\uE7F4");
 }
 
 void ToggleScreenLock(const ScreenButton& button) {
@@ -1219,116 +1220,136 @@ void UpdateDeviceView() {
         if (!g_displayMice[i].empty()) ++connectedSeats;
     }
     SendMessageW(g_seatList, LB_SETCURSEL, selected, 0);
-    const std::wstring status = L"Mouse slots: " + std::to_wstring(connectedSeats) +
-        L"/" + std::to_wstring(g_cfg.seatCount) + L" connected    |    HID inputs: " +
-        std::to_wstring(g_detectedMouseInputs);
+    const std::wstring status = std::to_wstring(connectedSeats) +
+        L"/" + std::to_wstring(g_cfg.seatCount) + L" mice connected";
     SetWindowTextW(g_deviceCount, status.c_str());
+    InvalidateRect(GetParent(g_seatList), nullptr, FALSE);
     LayoutScreenButtons();
 }
 
 void DrawSeatItem(const DRAWITEMSTRUCT* item) {
-    if (item->itemID == static_cast<UINT>(-1) || item->itemID >= static_cast<UINT>(g_cfg.seatCount))
-        return;
+    if (item->itemID >= static_cast<UINT>(g_cfg.seatCount)) return;
     const int seat = static_cast<int>(item->itemID);
-    const bool selected = (item->itemState & ODS_SELECTED) != 0;
-    FillRect(item->hDC, &item->rcItem,
-             GetSysColorBrush(selected ? COLOR_HIGHLIGHT : COLOR_WINDOW));
-    const int oldMode = SetBkMode(item->hDC, TRANSPARENT);
-    const COLORREF oldColor = SetTextColor(item->hDC,
-        GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : COLOR_WINDOWTEXT));
-    HGDIOBJ oldFont = SelectObject(item->hDC, GetStockObject(DEFAULT_GUI_FONT));
-
-    const COLORREF color = (seat < static_cast<int>(g_cfg.seatColors.size()))
-                         ? g_cfg.seatColors[seat] : RGB(200, 200, 200);
-    RECT swatch{item->rcItem.left + 12, item->rcItem.top + 10,
-                item->rcItem.left + 48, item->rcItem.top + 48};
-    HBRUSH brush = CreateSolidBrush(color);
-    FillRect(item->hDC, &swatch, brush);
-    DeleteObject(brush);
-    // Windows' native mouse glyph sits on the actual cursor colour.
-    HGDIOBJ textFont = SelectObject(item->hDC, g_mouseIconFont);
-    const int luminance = GetRValue(color) * 299 + GetGValue(color) * 587 + GetBValue(color) * 114;
-    const COLORREF textColor = SetTextColor(item->hDC,
-        luminance > 150000 ? RGB(20, 20, 20) : RGB(255, 255, 255));
-    DrawTextW(item->hDC, L"\uE962", 1, &swatch, DT_SINGLELINE | DT_CENTER | DT_VCENTER);
-    SetTextColor(item->hDC, textColor);
-    SelectObject(item->hDC, textFont);
-
+    const RECT row = item->rcItem;
+    ui::Buffer buffer(item->hDC, row);
+    HDC dc = buffer.dc;
+    ui::Fill(dc, row, ui::surface);
+    const COLORREF accent = SeatColor(seat);
+    const COLORREF ink = ui::highContrast ? ui::text : ui::Mix(accent, ui::text, .35f);
+    const int top = row.top;
+    const int textLeft = row.left + ui::Px(56);
+    const int textRight = row.right - g_screenButtonArea - ui::Px(20);
+    const bool wide = textRight - textLeft >= ui::Px(440);
+    const int detailRight = wide ? textRight - ui::Px(174) : textRight;
+    ui::Label(dc, L"\uE962", {row.left + ui::Px(6), top + ui::Px(18), row.left + ui::Px(42), top + ui::Px(62)},
+        ui::mouseIcon, ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    const auto* screen = g_screenLocks[seat].Selected(g_screens);
+    const std::wstring title = L"Mouse " + std::to_wstring(seat + 1);
     const auto& devices = g_displayMice[seat];
-    const auto* lockedScreen = g_screenLocks[seat].Selected(g_screens);
-    const std::wstring title = L"Mouse " + std::to_wstring(seat + 1) +
-        (lockedScreen ? L" - Locked to screen " + std::to_wstring(lockedScreen->number) : L" - Free");
-    std::wstring subtitle = devices.empty() ? L"No assigned mouse connected"
-                                           : devices.front().friendlyName;
-    if (devices.size() > 1)
-        subtitle += L" (" + std::to_wstring(devices.size()) + L" HID inputs)";
-    if (!devices.empty() && g_cfg.mouseBinding.empty())
-        subtitle += L" (automatic assignment)";
-    RECT line{swatch.right + 12, item->rcItem.top + 9,
-              item->rcItem.right - g_screenButtonArea - 12, item->rcItem.top + 28};
-    DrawTextW(item->hDC, title.c_str(), -1, &line, DT_SINGLELINE | DT_END_ELLIPSIS);
-    line.top += 22;
-    line.bottom += 22;
-    DrawTextW(item->hDC, subtitle.c_str(), -1, &line, DT_SINGLELINE | DT_END_ELLIPSIS);
-    SelectObject(item->hDC, oldFont);
-    SetTextColor(item->hDC, oldColor);
-    SetBkMode(item->hDC, oldMode);
-    if (item->itemState & ODS_FOCUS) DrawFocusRect(item->hDC, &item->rcItem);
+    std::wstring subtitle = devices.empty() ? L"No mouse connected" : devices.front().friendlyName;
+    if (devices.size() > 1) subtitle += L" (" + std::to_wstring(devices.size()) + L" inputs)";
+    ui::Label(dc, title.c_str(), {textLeft, top + ui::Px(16), detailRight, top + ui::Px(40)}, ui::strong, ui::text);
+    ui::Label(dc, subtitle.c_str(), {textLeft, top + ui::Px(41), detailRight, top + ui::Px(59)}, ui::small, ui::muted);
+    const int statusLeft = wide ? detailRight + ui::Px(14) : textLeft;
+    const int statusTop = top + ui::Px(wide ? 32 : 64);
+    const std::wstring status = screen ? L"Locked to Screen " + std::to_wstring(screen->number) : L"Free";
+    ui::Label(dc, screen ? L"\uE72E" : L"\uE785", {statusLeft, statusTop, statusLeft + ui::Px(19), statusTop + ui::Px(20)},
+        ui::statusIcon, screen ? ink : ui::muted);
+    ui::Label(dc, status.c_str(), {statusLeft + ui::Px(25), statusTop, textRight, statusTop + ui::Px(20)},
+        ui::small, screen ? ink : ui::muted);
+    if (seat + 1 < g_cfg.seatCount) ui::Rule(dc, row.left, row.right, row.bottom - 1);
+    if (GetFocus() == g_seatList && (item->itemState & ODS_FOCUS) &&
+        !(SendMessageW(g_seatList, WM_QUERYUISTATE, 0, 0) & UISF_HIDEFOCUS)) {
+        RECT focus{row.left, row.top + 2, textRight, row.bottom - 2};
+        DrawFocusRect(dc, &focus);
+    }
 }
 
 void LayoutMainWindow(HWND hwnd) {
     if (IsIconic(hwnd)) return;
     RECT client{};
     GetClientRect(hwnd, &client);
-    const int width = client.right;
-    const int height = client.bottom;
+    const int width = client.right, height = client.bottom;
     if (width <= 0 || height <= 0) return;
-    const int listHeight = std::max(100, height - 106);
-    MoveWindow(g_deviceCount, 16, 14, width - 32, 25, TRUE);
-    MoveWindow(g_seatList, 16, 46, width - 32, listHeight, TRUE);
-    MoveWindow(g_closeButton, width - 164, height - 44, 148, 28, TRUE);
-    MoveWindow(g_automationLabel, 16, height - 39, 78, 22, TRUE);
-    MoveWindow(g_automationChoice, 96, height - 44, 108, 180, TRUE);
+    MoveWindow(g_deviceCount, width - ui::Px(220), ui::Px(27), ui::Px(196), ui::Px(24), TRUE);
+    MoveWindow(g_automationLabel, ui::Px(24), ui::Px(92), ui::Px(180), ui::Px(24), TRUE);
+    const int segments = g_cfg.seatCount + 1;
+    const int columns = AutomationColumns(width);
+    const int segmentWidth = ui::Px(92);
+    for (int i = 0; i < segments; ++i)
+        MoveWindow(g_automationSegments[i], width - ui::Px(24) - (columns - i % columns) * segmentWidth,
+            ui::Px(84 + (i / columns) * 44), segmentWidth - ui::Px(4), ui::Px(36), TRUE);
+    const int listTop = SeatListTop(width);
+    MoveWindow(g_seatList, ui::Px(24), listTop, width - ui::Px(48),
+        std::max(ui::Px(94), height - listTop - ui::Px(60)), TRUE);
+    MoveWindow(g_closeButton, width - ui::Px(172), height - ui::Px(46), ui::Px(148), ui::Px(32), TRUE);
     LayoutScreenButtons();
+    InvalidateRect(hwnd, nullptr, FALSE);
+}
+
+void RefreshUiFonts(HWND hwnd, UINT dpi) {
+    ui::Refresh(dpi);
+    for (HWND child : {g_deviceCount, g_seatList, g_closeButton, g_automationLabel})
+        if (child) SendMessageW(child, WM_SETFONT, reinterpret_cast<WPARAM>(ui::body), FALSE);
+    for (HWND child : g_automationSegments)
+        if (child) SendMessageW(child, WM_SETFONT, reinterpret_cast<WPARAM>(ui::body), FALSE);
+    for (const auto& button : g_screenButtons)
+        SendMessageW(button.hwnd, WM_SETFONT, reinterpret_cast<WPARAM>(ui::body), FALSE);
+    if (g_seatList) LayoutMainWindow(hwnd);
+    RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN);
+}
+
+void PaintMainWindow(HWND hwnd, HDC target) {
+    RECT client{};
+    GetClientRect(hwnd, &client);
+    ui::Buffer buffer(target, client);
+    HDC dc = buffer.dc;
+    ui::Fill(dc, client, ui::surface);
+    const HINSTANCE inst = reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(hwnd, GWLP_HINSTANCE));
+    HICON icon = reinterpret_cast<HICON>(LoadImageW(inst, MAKEINTRESOURCEW(IDI_DUALCURSOR),
+        IMAGE_ICON, ui::Px(36), ui::Px(36), LR_SHARED));
+    DrawIconEx(dc, ui::Px(24), ui::Px(18), icon, ui::Px(36), ui::Px(36), 0, nullptr, DI_NORMAL);
+    ui::Label(dc, L"DualCursor", {ui::Px(72), ui::Px(14), client.right - ui::Px(230), ui::Px(58)}, ui::title, ui::text);
+    ui::Rule(dc, ui::Px(24), client.right - ui::Px(24), ui::Px(72));
+    ui::Rule(dc, ui::Px(24), client.right - ui::Px(24), SeatListTop(client.right));
+    ui::Rule(dc, ui::Px(24), client.right - ui::Px(24), client.bottom - ui::Px(60));
+    const std::wstring footer = std::to_wstring(g_detectedMouseInputs) + L" HID inputs";
+    ui::Label(dc, footer.c_str(), {ui::Px(24), client.bottom - ui::Px(45), client.right - ui::Px(190), client.bottom - ui::Px(15)},
+        ui::small, ui::muted);
 }
 
 bool CreateMainControls(HWND hwnd) {
     const HINSTANCE inst = reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(hwnd, GWLP_HINSTANCE));
-    g_mouseIconFont = CreateFontW(-26, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
-        DEFAULT_PITCH, L"Segoe MDL2 Assets");
-    g_screenIconFont = CreateFontW(-18, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
-        DEFAULT_PITCH, L"Segoe MDL2 Assets");
-    g_deviceCount = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE,
-                                    0, 0, 0, 0, hwnd, nullptr, inst, nullptr);
-    g_seatList = CreateWindowExW(WS_EX_CLIENTEDGE | WS_EX_CONTROLPARENT, L"LISTBOX", L"",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | WS_CLIPCHILDREN | LBS_NOTIFY |
-        LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT | LBS_DISABLENOSCROLL,
+    INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_STANDARD_CLASSES};
+    InitCommonControlsEx(&controls);
+    ui::Refresh(GetDpiForWindow(hwnd));
+    g_deviceCount = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_RIGHT,
+        0, 0, 0, 0, hwnd, nullptr, inst, nullptr);
+    g_automationLabel = CreateWindowExW(0, L"STATIC", L"Automation routing", WS_CHILD | WS_VISIBLE,
+        0, 0, 0, 0, hwnd, nullptr, inst, nullptr);
+    g_automationSeat = std::min(1, g_cfg.seatCount - 1);
+    for (int i = 0; i <= g_cfg.seatCount; ++i) {
+        const std::wstring label = i ? L"Mouse " + std::to_wstring(i) : L"Off";
+        g_automationSegments[i] = CreateWindowExW(0, L"BUTTON", label.c_str(),
+            WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON | BS_PUSHLIKE |
+            (i == 0 ? WS_GROUP : 0) | (i == g_automationSeat + 1 ? WS_TABSTOP : 0),
+            0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAutomationId + i)), inst, nullptr);
+        if (!g_automationSegments[i]) return false;
+        ui::StyleButton(g_automationSegments[i], i ? SeatColor(i - 1) : RGB(56, 101, 175));
+        SendMessageW(g_automationSegments[i], BM_SETCHECK, i == g_automationSeat + 1 ? BST_CHECKED : BST_UNCHECKED, 0);
+    }
+    g_seatList = CreateWindowExW(WS_EX_CONTROLPARENT, L"LISTBOX", L"Connected mice",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP | WS_VSCROLL | WS_CLIPCHILDREN | LBS_NOTIFY |
+        LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT,
         0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSeatListId)), inst, nullptr);
     g_closeButton = CreateWindowExW(0, L"BUTTON", L"Close DualCursor",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-        0, 0, 0, 0, hwnd,
-        reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCloseButtonId)), inst, nullptr);
-    g_automationLabel = CreateWindowExW(0, L"STATIC", L"Automation:", WS_CHILD | WS_VISIBLE,
-        0, 0, 0, 0, hwnd, nullptr, inst, nullptr);
-    g_automationChoice = CreateWindowExW(0, L"COMBOBOX", L"",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL,
-        0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAutomationId)), inst, nullptr);
-    if (!g_mouseIconFont || !g_screenIconFont || !g_deviceCount || !g_seatList || !g_closeButton ||
-        !g_automationLabel || !g_automationChoice) return false;
-    SendMessageW(g_automationChoice, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Off"));
-    for (int seat = 0; seat < g_cfg.seatCount; ++seat) {
-        const std::wstring label = L"Mouse " + std::to_wstring(seat + 1);
-        SendMessageW(g_automationChoice, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
-    }
-    g_automationSeat = std::min(1, g_cfg.seatCount - 1);
-    SendMessageW(g_automationChoice, CB_SETCURSEL, g_automationSeat + 1, 0);
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP | BS_PUSHBUTTON,
+        0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCloseButtonId)), inst, nullptr);
+    if (!g_deviceCount || !g_seatList || !g_closeButton || !g_automationLabel) return false;
+    ui::StyleButton(g_closeButton);
     g_seatListProc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(g_seatList, GWLP_WNDPROC,
         reinterpret_cast<LONG_PTR>(SeatListProc)));
-    for (HWND child : {g_deviceCount, g_seatList, g_closeButton, g_automationLabel, g_automationChoice})
-        SendMessageW(child, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
-    SendMessageW(g_seatList, LB_SETITEMHEIGHT, 0, 58);
+    RefreshUiFonts(hwnd, ui::dpi);
     RebuildScreenButtons();
     return true;
 }
@@ -1454,16 +1475,48 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_SIZE:
         if (wp != SIZE_MINIMIZED && g_seatList) LayoutMainWindow(hwnd);
         return 0;
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT: {
+        PAINTSTRUCT paint{};
+        HDC dc = BeginPaint(hwnd, &paint);
+        PaintMainWindow(hwnd, dc);
+        EndPaint(hwnd, &paint);
+        return 0;
+    }
+    case WM_PRINTCLIENT:
+        PaintMainWindow(hwnd, reinterpret_cast<HDC>(wp));
+        return 0;
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORLISTBOX:
+        SetTextColor(reinterpret_cast<HDC>(wp), ui::muted);
+        SetBkColor(reinterpret_cast<HDC>(wp), ui::surface);
+        return reinterpret_cast<LRESULT>(ui::surfaceBrush);
+    case WM_DPICHANGED: {
+        RefreshUiFonts(hwnd, HIWORD(wp));
+        const auto* rect = reinterpret_cast<const RECT*>(lp);
+        SetWindowPos(hwnd, nullptr, rect->left, rect->top, rect->right - rect->left,
+            rect->bottom - rect->top, SWP_NOZORDER | SWP_NOACTIVATE);
+        return 0;
+    }
+    case WM_SETTINGCHANGE:
+    case WM_SYSCOLORCHANGE:
+        RefreshUiFonts(hwnd, GetDpiForWindow(hwnd));
+        return 0;
     case WM_GETMINMAXINFO: {
         auto* limits = reinterpret_cast<MINMAXINFO*>(lp);
-        limits->ptMinTrackSize = {500, 270};
+        RECT minimum{0, 0, ui::Px(620), SeatListTop(ui::Px(620)) + ui::Px(248)};
+        AdjustWindowRectExForDpi(&minimum, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, FALSE, 0, ui::dpi);
+        limits->ptMinTrackSize = {minimum.right - minimum.left, minimum.bottom - minimum.top};
         return 0;
     }
     case WM_COMMAND:
-        if (LOWORD(wp) == kAutomationId && HIWORD(wp) == CBN_SELCHANGE) {
+        if (LOWORD(wp) >= kAutomationId && LOWORD(wp) <= kAutomationId + g_cfg.seatCount && HIWORD(wp) == BN_CLICKED) {
             CancelAutomationButtons();
-            const int selection = static_cast<int>(SendMessageW(g_automationChoice, CB_GETCURSEL, 0, 0));
+            const int selection = LOWORD(wp) - kAutomationId;
             g_automationSeat = selection > 0 && selection <= g_cfg.seatCount ? selection - 1 : -1;
+            for (int i = 0; i <= g_cfg.seatCount; ++i)
+                SendMessageW(g_automationSegments[i], BM_SETCHECK, i == selection ? BST_CHECKED : BST_UNCHECKED, 0);
             POINT actual{};
             GetCursorPos(&actual);
             g_automationInput.Configure(g_cursorHidden && g_eatMoves ? g_automationSeat : -1,
@@ -1630,8 +1683,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
 
     case WM_DESTROY:
-        if (g_mouseIconFont) { DeleteObject(g_mouseIconFont); g_mouseIconFont = nullptr; }
-        if (g_screenIconFont) { DeleteObject(g_screenIconFont); g_screenIconFont = nullptr; }
+        ui::Shutdown();
         return 0;
     case WM_CLOSE:
         CancelAutomationButtons();
@@ -2508,11 +2560,14 @@ int RunMain(HINSTANCE inst) {
     wc.hCursor       = LoadCursorW(nullptr, IDC_ARROW);
     wc.hIcon         = AppIcon(inst, false);
     wc.hIconSm       = AppIcon(inst, true);
-    wc.hbrBackground = GetSysColorBrush(COLOR_BTNFACE);
+    wc.hbrBackground = nullptr;
     RegisterClassExW(&wc);
 
-    RECT windowRect{0, 0, 700, 106 + std::max(2, std::min(g_cfg.seatCount, 4)) * 58 + 4};
-    AdjustWindowRectEx(&windowRect, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, FALSE, 0);
+    const UINT initialDpi = GetDpiForSystem();
+    const int automationRows = (g_cfg.seatCount + 6) / 6;
+    RECT windowRect{0, 0, MulDiv(820, initialDpi, 96),
+        MulDiv(148 + automationRows * 44 + std::max(2, std::min(g_cfg.seatCount, 4)) * 94, initialDpi, 96)};
+    AdjustWindowRectExForDpi(&windowRect, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, FALSE, 0, initialDpi);
     g_hwnd = CreateWindowExW(0, wc.lpszClassName, L"DualCursor",
         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
         CW_USEDEFAULT, CW_USEDEFAULT, windowRect.right - windowRect.left,
